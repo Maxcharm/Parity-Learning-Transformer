@@ -10,6 +10,7 @@ from torch.utils.data import DataLoader, TensorDataset
 import numpy as np
 from matplotlib import pyplot as plt
 import pickle
+from datetime import datetime
 # %%
 
 
@@ -19,10 +20,8 @@ def simple_embedding(x):
 
     positions = torch.arange(length, dtype=torch.float32) * (2 * math.pi / length)
     positional_embeddings = torch.stack([torch.cos(positions), torch.sin(positions)], dim=1)
-    encoded_tensor = torch.cat([token_embedding, positional_embeddings], dim=1) 
+    encoded_tensor = torch.cat([token_embedding, positional_embeddings], dim=1)
     return encoded_tensor
-
-# %%
 
 
 def data_generator(
@@ -47,7 +46,6 @@ def data_generator(
     return x_embeddings, y, data_embeddings, labels, parity_bits
 
 
-# %%
 def collect_attention(heads, true_bits, sample):
     length = sample.shape[1]
     v0 = torch.zeros(length)
@@ -61,7 +59,6 @@ def collect_attention(heads, true_bits, sample):
     return weights
 
 
-# %%
 class parity_NN(nn.Module):
     def __init__(self, k: int = 3) -> None:
         super().__init__()
@@ -101,8 +98,10 @@ class parity_NN(nn.Module):
             attention_vectors.append(attn_output)
         attention_vectors = torch.concat(attention_vectors, dim=1)
         return self.network(attention_vectors)
-# %%
-def visualize_weights(weights, true_bits, length, num_epochs):
+
+
+def visualize_weights(weights, true_bits):
+    current_time = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
     weights = np.array(weights)
     num_heads = weights.shape[1]
     fig, axes = plt.subplots(1, num_heads, figsize=(15, 5), sharey=True)
@@ -110,18 +109,20 @@ def visualize_weights(weights, true_bits, length, num_epochs):
         ax = axes[head_idx]
         head_scores = weights[:, head_idx, :]
         heatmap = ax.imshow(head_scores, aspect="auto", cmap="viridis",
-                            origin="lower", extent=[0.5, length - 0.5, 0, num_epochs])
+                            origin="lower")
         ax.set_title(f"Head {head_idx + 1}")
         ax.set_xlabel("Attention score for each position")
         ax.set_ylabel("Epoch")
-        ax.set_xticks(true_bits)
-        ax.set_xticklabels([f"{pos}" for pos in true_bits], rotation=45, ha="right")
+        shifted_labels = [pos + 0.5 for pos in true_bits]
+        ax.set_xticks(shifted_labels)
+        ax.set_xticklabels([f"{pos}" for pos in true_bits], rotation=0)
+        ax.tick_params(axis="x", which="both", length=0)
         cbar = fig.colorbar(heatmap, ax=ax, orientation="vertical")
         cbar.set_label("Attention Score")
     plt.tight_layout()
-    plt.show()
+    plt.savefig(f"{len(true_bits)}_bits_{current_time}.jpg")
 
-# %%
+
 def test(model, x, y):
     pred = model(x)
     predicted_classes = (pred >= 0.5).float()
@@ -132,7 +133,7 @@ def test(model, x, y):
 
 if __name__ == "__main__":
     number_of_data = int(2**20 * 0.8)
-    k = 3
+    k = 5
     epochs = 30
     batch_size = 8000
     loss_fn = HingeLoss(task="binary")
@@ -141,18 +142,14 @@ if __name__ == "__main__":
     dataset = TensorDataset(data, label)
     dataloader = DataLoader(dataset, batch_size=batch_size, shuffle=True)
     parity_network = parity_NN(k)
-    attention_params = (
-        list(parity_network.attention_heads[0].parameters()) +
-        list(parity_network.attention_heads[1].parameters()) +
-        list(parity_network.attention_heads[2].parameters())
-        # list(parity_network.attention_heads[3].parameters())
-    )
+    attention_params = []
+    for i in range(k):
+        attention_params += list(parity_network.attention_heads[i].parameters())
     total_weights = []
     with torch.no_grad():
         total_weights.append(collect_attention(parity_network.attention_heads, bits, data[0]))
     optimizer = torch.optim.Adam(attention_params, lr=8e-2)
     parity_network.train()
-    
     for i in range(epochs):
         total_loss = 0
         for batch_idx, (inputs, targets) in enumerate(dataloader):
@@ -168,7 +165,6 @@ if __name__ == "__main__":
             total_weights.append(collect_attention(parity_network.attention_heads, bits, data[0]))
     with open("weights_test.pkl", "wb") as f:
         pickle.dump(total_weights, f)
-    visualize_weights(weights=total_weights, true_bits=bits, length=20, num_epochs=epochs)
+    visualize_weights(weights=total_weights, true_bits=bits)
     parity_network.eval()
     print(test(parity_network, x[:2000], y[:2000]))
-# %%
