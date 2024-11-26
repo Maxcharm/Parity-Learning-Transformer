@@ -16,10 +16,16 @@ from datetime import datetime
 
 def simple_embedding(x):
     length = len(x)
-    token_embedding = torch.stack([torch.tensor(x), 1 - torch.tensor(x)], dim=1)
+    token_embedding = torch.stack(
+        [torch.tensor(x), 1 - torch.tensor(x)], dim=1
+        )
 
-    positions = torch.arange(length, dtype=torch.float32) * (2 * math.pi / length)
-    positional_embeddings = torch.stack([torch.cos(positions), torch.sin(positions)], dim=1)
+    positions = torch.arange(
+        length, dtype=torch.float32
+        ) * (2 * math.pi / length)
+    positional_embeddings = torch.stack(
+        [torch.cos(positions), torch.sin(positions)], dim=1
+        )
     encoded_tensor = torch.cat([token_embedding, positional_embeddings], dim=1)
     return encoded_tensor
 
@@ -34,7 +40,9 @@ def data_generator(
     num = 2 ** n
     x = torch.zeros((num, n), dtype=torch.float32)
     for i in range(num):
-        x[i] = torch.tensor(list(map(int, bin(i)[2:].zfill(n))), dtype=torch.float)
+        x[i] = torch.tensor(
+            list(map(int, bin(i)[2:].zfill(n))), dtype=torch.float
+            )
     y = x[:, parity_bits].sum(dim=1) % 2
     # y = - 2 * y + 1
     y = y.reshape(-1, 1)
@@ -46,7 +54,7 @@ def data_generator(
     return x_embeddings, y, data_embeddings, labels, parity_bits
 
 
-def collect_attention(heads, true_bits, sample):
+def collect_attention(heads, sample):
     length = sample.shape[1]
     v0 = torch.zeros(length)
     v0[0] = 1
@@ -83,7 +91,10 @@ class parity_NN(nn.Module):
             first_layer.bias.data = -torch.arange(k).float() - 0.5
 
             second_layer = self.network[2]
-            weights = torch.tensor([((-1) ** i) * (2 + 4 * i) for i in range(k)], dtype=torch.float32)
+            weights = torch.tensor(
+                [((-1) ** i) * (2 + 4 * i) for i in range(k)],
+                dtype=torch.float32
+                )
             second_layer.weight.data = weights.view(1, -1)  # Shape: (k, 1)
             second_layer.bias.data.zero_()
 
@@ -99,29 +110,38 @@ class parity_NN(nn.Module):
         attention_vectors = torch.concat(attention_vectors, dim=1)
         return self.network(attention_vectors)
 
-
+# %%
 def visualize_weights(weights, true_bits):
     current_time = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
     weights = np.array(weights)
     num_heads = weights.shape[1]
-    fig, axes = plt.subplots(1, num_heads, figsize=(15, 5), sharey=True)
-    for head_idx in range(num_heads):
-        ax = axes[head_idx]
-        head_scores = weights[:, head_idx, :]
-        heatmap = ax.imshow(head_scores, aspect="auto", cmap="viridis",
-                            origin="lower")
-        ax.set_title(f"Head {head_idx + 1}")
-        ax.set_xlabel("Attention score for each position")
-        ax.set_ylabel("Epoch")
-        shifted_labels = [pos + 0.5 for pos in true_bits]
-        ax.set_xticks(shifted_labels)
-        ax.set_xticklabels([f"{pos}" for pos in true_bits], rotation=0)
-        ax.tick_params(axis="x", which="both", length=0)
-        cbar = fig.colorbar(heatmap, ax=ax, orientation="vertical")
-        cbar.set_label("Attention Score")
-    plt.tight_layout()
-    plt.savefig(f"{len(true_bits)}_bits_{current_time}.jpg")
+    fig, axes = plt.subplots(num_heads, 1, figsize=(14, 10), sharex=True)
+    # Create a shared color bar axis
+    cbar_ax = fig.add_axes([0.90, 0.15, 0.02, 0.7])
 
+    for head_idx, ax in enumerate(axes):
+        head_scores = weights[:, head_idx, :].T
+        heatmap = ax.imshow(
+            head_scores, aspect="auto", cmap="viridis", origin="lower"
+            )
+        ax.set_title(f"Head {head_idx + 1}", fontsize=25, loc="right")
+        shifted_positions = [pos + 0.5 for pos in true_bits]
+        ax.set_yticks(shifted_positions)
+        ax.set_yticklabels([str(pos) for pos in true_bits], fontsize=14)
+    axes[-1].set_xlabel("Epoch", fontsize=25)
+    for ax in axes:
+        ax.tick_params(axis="x", labelsize=20)
+    cbar = fig.colorbar(
+        heatmap, cax=cbar_ax, orientation="vertical", label="Attention Score"
+        )
+    cbar.ax.tick_params(labelsize=14)
+    cbar.ax.set_ylabel("Attention Score", fontsize=25)
+    # fig.text(
+    #     0.02, 0.5, 'Attention score for each position', va='center',
+    #     ha='center', rotation='vertical', fontsize=25)
+    plt.tight_layout(rect=[0, 0, 0.9, 1])
+    plt.savefig(f"{len(true_bits)}_bits_{current_time}.jpg")
+# %%
 
 def test(model, x, y):
     pred = model(x)
@@ -132,8 +152,9 @@ def test(model, x, y):
 
 
 if __name__ == "__main__":
-    number_of_data = int(2**20 * 0.8)
-    k = 5
+    length = 20
+    number_of_data = int(2**length * 0.8)
+    k = 3
     epochs = 30
     batch_size = 8000
     loss_fn = HingeLoss(task="binary")
@@ -144,10 +165,14 @@ if __name__ == "__main__":
     parity_network = parity_NN(k)
     attention_params = []
     for i in range(k):
-        attention_params += list(parity_network.attention_heads[i].parameters())
+        attention_params += list(
+            parity_network.attention_heads[i].parameters()
+            )
     total_weights = []
     with torch.no_grad():
-        total_weights.append(collect_attention(parity_network.attention_heads, bits, data[0]))
+        total_weights.append(
+            collect_attention(parity_network.attention_heads, data[0])
+            )
     optimizer = torch.optim.Adam(attention_params, lr=8e-2)
     parity_network.train()
     for i in range(epochs):
@@ -162,7 +187,9 @@ if __name__ == "__main__":
         # if i % 2 == 0:
         print(f"epoch: {i}, loss: {loss:>7f}.")
         with torch.no_grad():
-            total_weights.append(collect_attention(parity_network.attention_heads, bits, data[0]))
+            total_weights.append(
+                collect_attention(parity_network.attention_heads, data[0])
+                )
     with open("weights_test.pkl", "wb") as f:
         pickle.dump(total_weights, f)
     visualize_weights(weights=total_weights, true_bits=bits)
