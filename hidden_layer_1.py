@@ -66,14 +66,30 @@ def collect_attention(heads, sample):
         weights.append(attention_weights)
     return weights
 
-
+def print_initialisation_information(heads, sample, true_bits):
+    print("-------------init information------------")
+    print(f"the true bits are {true_bits}.")
+    length = sample.shape[1]
+    v0 = torch.zeros(length)
+    v0[0] = 1
+    for i, head in enumerate(heads):
+        Av0 = torch.matmul(v0, head.A)
+        scores = torch.matmul(sample, Av0.unsqueeze(-1)).squeeze(-1)
+        attention_weights = F.softmax(scores, dim=-1)
+        indexed_scores = [(weight, i) for i, weight in enumerate(attention_weights)]
+        indexed_scores.sort(reverse=True, key=lambda x: x[0])
+        rank_map = {idx: rank for rank, (_, idx) in enumerate(indexed_scores, start=1)}
+        ranked_positions = sorted(true_bits, key=lambda pos: rank_map[pos])
+        print(f"the rank of head {i} is: {ranked_positions}.")
+    
+    return ranked_positions
 class parity_NN(nn.Module):
     def __init__(self, k: int = 3) -> None:
         super().__init__()
         self.attention_heads = [Attention(dim=4) for _ in range(k)]
         self.network = nn.Sequential(
             nn.Linear(k*4, k),
-            nn.ReLU(),
+            nn.GELU(),
             nn.Linear(k, 1),
             )
         self.freeze_params()
@@ -110,6 +126,7 @@ class parity_NN(nn.Module):
         attention_vectors = torch.concat(attention_vectors, dim=1)
         return self.network(attention_vectors)
 
+
 # %%
 def visualize_weights(weights, true_bits):
     current_time = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
@@ -140,8 +157,9 @@ def visualize_weights(weights, true_bits):
     #     0.02, 0.5, 'Attention score for each position', va='center',
     #     ha='center', rotation='vertical', fontsize=25)
     plt.tight_layout(rect=[0, 0, 0.9, 1])
-    plt.savefig(f"{len(true_bits)}_bits_{current_time}.jpg")
+    plt.savefig(f"pictures/{len(true_bits)}_bits_{current_time}.jpg")
 # %%
+
 
 def test(model, x, y):
     pred = model(x)
@@ -152,10 +170,10 @@ def test(model, x, y):
 
 
 if __name__ == "__main__":
-    length = 20
+    length = 30
     number_of_data = int(2**length * 0.8)
-    k = 3
-    epochs = 30
+    k = 5
+    epochs = 40
     batch_size = 8000
     loss_fn = HingeLoss(task="binary")
     # loss_fn = nn.MSELoss()
@@ -170,6 +188,7 @@ if __name__ == "__main__":
             )
     total_weights = []
     with torch.no_grad():
+        print_initialisation_information(parity_network.attention_heads, data[0], bits)
         total_weights.append(
             collect_attention(parity_network.attention_heads, data[0])
             )
@@ -195,3 +214,4 @@ if __name__ == "__main__":
     visualize_weights(weights=total_weights, true_bits=bits)
     parity_network.eval()
     print(test(parity_network, x[:2000], y[:2000]))
+    print("optimal params for A saved")
