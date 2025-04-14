@@ -2,6 +2,7 @@
 import torch.nn as nn
 import torch
 from torchmetrics import HingeLoss
+from torchmetrics.classification import BinaryHingeLoss
 import random
 import math
 from hard_attention import Attention
@@ -62,6 +63,8 @@ def collect_attention(heads, sample):
     for head in heads:
         Av0 = torch.matmul(v0, head.A)
         scores = torch.matmul(sample, Av0.unsqueeze(-1)).squeeze(-1)
+        # temperature = 1 / 20
+        # scores /= temperature
         attention_weights = F.softmax(scores, dim=-1)
         weights.append(attention_weights)
     return weights
@@ -88,7 +91,7 @@ class parity_NN(nn.Module):
         super().__init__()
         self.attention_heads = [Attention(dim=4) for _ in range(k)]
         self.network = nn.Sequential(
-            nn.Linear(k*4, k),
+            nn.Linear(4, k),
             nn.GELU(),
             nn.Linear(k, 1),
             )
@@ -98,17 +101,17 @@ class parity_NN(nn.Module):
     def initialize_params(self, k):
         with torch.no_grad():
             first_layer = self.network[0]
-            weight_pattern = torch.zeros(k, 4 * k)
+            weight_pattern = torch.zeros(k, 4)
 
             for i in range(k):
-                weight_pattern[i, :] = torch.tensor([1, 0, 0, 0] * k)
+                weight_pattern[i, :] = torch.tensor([k, 0, 0, 0])
 
             first_layer.weight.data = weight_pattern
             first_layer.bias.data = -torch.arange(k).float() - 0.5
 
             second_layer = self.network[2]
             weights = torch.tensor(
-                [((-1) ** i) * (2 + 4 * i) for i in range(k)],
+                [((-1) ** i) * (2 + 2 * i) for i in range(k)],
                 dtype=torch.float32
                 )
             second_layer.weight.data = weights.view(1, -1)  # Shape: (k, 1)
@@ -123,7 +126,9 @@ class parity_NN(nn.Module):
         for head in self.attention_heads:
             attn_output = head(x)
             attention_vectors.append(attn_output)
-        attention_vectors = torch.concat(attention_vectors, dim=1)
+        stacked_tensors = torch.stack(attention_vectors)
+        attention_vectors = stacked_tensors.mean(dim=0)
+        # attention_vectors = torch.concat(attention_vectors, dim=1)
         return self.network(attention_vectors)
 
 
@@ -163,6 +168,8 @@ def visualize_weights(weights, true_bits):
 
 def test(model, x, y):
     pred = model(x)
+    print(y[:5])
+    print(pred[:5])
     predicted_classes = (pred >= 0.5).float()
     correct_predictions = (predicted_classes == y).sum()
     accuracy = correct_predictions / y.size(0)
@@ -172,10 +179,11 @@ def test(model, x, y):
 if __name__ == "__main__":
     length = 30
     number_of_data = int(2**length * 0.8)
-    k = 5
-    epochs = 40
-    batch_size = 8000
+    k = 2
+    epochs = 30
+    batch_size = 12000
     loss_fn = HingeLoss(task="binary")
+    # loss_fn = BinaryHingeLoss(squared=True)
     # loss_fn = nn.MSELoss()
     x, y, data, label, bits = data_generator(number_of_data, k)
     dataset = TensorDataset(data, label)
@@ -199,6 +207,7 @@ if __name__ == "__main__":
         for batch_idx, (inputs, targets) in enumerate(dataloader):
             pred = parity_network(inputs)
             loss = loss_fn(pred, targets)
+            # loss = loss_fn(pred, targets, parity_network)
             optimizer.zero_grad()
             loss.backward()
             optimizer.step()
@@ -209,9 +218,14 @@ if __name__ == "__main__":
             total_weights.append(
                 collect_attention(parity_network.attention_heads, data[0])
                 )
-    with open("weights_test.pkl", "wb") as f:
-        pickle.dump(total_weights, f)
+    # with open("weights_test.pkl", "wb") as f:
+    #     pickle.dump(total_weights, f)
     visualize_weights(weights=total_weights, true_bits=bits)
     parity_network.eval()
     print(test(parity_network, x[:2000], y[:2000]))
-    print("optimal params for A saved")
+    # print("optimal params for A saved")
+    sum_of_norms = 0
+    for head in parity_network.attention_heads:
+        sum_of_norms += torch.norm(head.A)
+    print(f"the sum of the norms of the attention heads is: {sum_of_norms}.")
+        
