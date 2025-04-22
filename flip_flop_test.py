@@ -9,6 +9,8 @@ import torch.nn.functional as F
 import matplotlib.pyplot as plt
 import seaborn as sns
 
+import copy
+
 dataset = datasets.load_dataset("synthseq/flipflop")
 flip_flop_dict = {'0': 0, "1": 1, "w": 2,"r": 3, "i": 4}
 
@@ -37,8 +39,10 @@ class NextTokenDataset(torch.utils.data.Dataset):
     def __getitem__(self, idx):
         return self.data[idx] 
 
-train_small = dataset["train"].select(range(20000))
-val_small = dataset["val"].select(range(1000))
+# train_small = dataset["train"].select(range(20000))
+# val_small = dataset["val"].select(range(1000))
+train_small = dataset["val_dense"].select(range(3200))
+val_small = dataset["val_dense"].select(range(3200, 4000))
 train_dataset = NextTokenDataset(train_small)
 val_dataset = NextTokenDataset(val_small)
 
@@ -88,7 +92,7 @@ class Transformer(nn.Module):
             dictionary_size:int,
             num_attn_layer:int=2,
             num_attn_heads:int=1,
-            attn_dim:int=16,
+            attn_dim:int=8,
             
         ):
         super().__init__()
@@ -110,16 +114,15 @@ class Transformer(nn.Module):
                     nn.ReLU(),
                     nn.Linear(attn_dim, attn_dim)
                 ),
-                "norm1": nn.LayerNorm(attn_dim),
             }))
 
         
         self.attn_weights = [] 
 
         self.classification = nn.ModuleList([
-            nn.Linear(in_features=attn_dim, out_features=attn_dim*2),
+            nn.Linear(in_features=attn_dim, out_features=attn_dim),
             nn.ReLU(),
-            nn.Linear(in_features=attn_dim*2, out_features=dictionary_size)
+            nn.Linear(in_features=attn_dim, out_features=dictionary_size)
         ])
 
     def forward(self, x, need_weights=False):
@@ -136,7 +139,7 @@ class Transformer(nn.Module):
         for layer in self.attention_layers:
             residual = emb
             attn_output, attn_w = layer["mha"](emb, emb, emb, attn_mask=attn_mask, need_weights=need_weights)
-            emb = layer["norm1"](residual + attn_output)
+            emb = residual + attn_output
 
             if need_weights:
                 self.attn_weights.append(attn_w.detach().cpu())
@@ -179,19 +182,23 @@ def eval_epoch(model, loader, loss_fn):
     return total_loss / len(loader)
 vocab_size = 5
 
-early_stopper = EarlyStopper(patience=10)
+
+
+
+
 
 model = Transformer(max_seq_len=512, num_attn_layer=2, dictionary_size=vocab_size).to(device)
-optimizer = torch.optim.SGD(model.parameters(), lr=5e-3)
+optimizer = torch.optim.Adam(model.parameters(), lr=5e-3)
 loss_fn = nn.CrossEntropyLoss()
 
-for epoch in range(200):
+early_stopper = EarlyStopper(patience=20)
+
+for epoch in range(600):
     train_loss = train_epoch(model, train_loader, optimizer, loss_fn)
     val_loss = eval_epoch(model, val_loader, loss_fn)
     print(f"Epoch {epoch+1}: train loss = {train_loss:.4f}, val loss = {val_loss:.4f}")
     if early_stopper.early_stop(val_loss):
         break
-
 
 
 def visualize_attention(attn_weights, token_labels=None):
@@ -205,7 +212,7 @@ def visualize_attention(attn_weights, token_labels=None):
             
         plt.show()
 
-sentence = "w0w1r1i0i0r1w0r0"
+sentence = "w0w1w1r1w0w1w1w0r0"
 ids = torch.tensor([[flip_flop_dict[c] for c in sentence]]).to(device)  # [1, seq_len]
 model.eval()
 _ = model(ids, need_weights=True)
