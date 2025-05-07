@@ -9,6 +9,9 @@ import torch.nn.functional as F
 import matplotlib.pyplot as plt
 import seaborn as sns
 
+import numpy as np
+
+
 dataset = datasets.load_dataset("synthseq/flipflop")
 flip_flop_dict = {'0': 0, "1": 1, "w": 2,"r": 3, "i": 4}
 
@@ -37,8 +40,10 @@ class NextTokenDataset(torch.utils.data.Dataset):
     def __getitem__(self, idx):
         return self.data[idx] 
 
-train_small = dataset["train"].select(range(20000))
-val_small = dataset["val"].select(range(1000))
+# train_small = dataset["train"].select(range(20000))
+# val_small = dataset["val"].select(range(1000))
+train_small = dataset["val_dense"].select(range(3200))
+val_small = dataset["val_dense"].select(range(3200, 4000))
 train_dataset = NextTokenDataset(train_small)
 val_dataset = NextTokenDataset(val_small)
 
@@ -88,7 +93,7 @@ class Transformer(nn.Module):
             dictionary_size:int,
             num_attn_layer:int=2,
             num_attn_heads:int=1,
-            attn_dim:int=16,
+            attn_dim:int=8,
             
         ):
         super().__init__()
@@ -110,16 +115,15 @@ class Transformer(nn.Module):
                     nn.ReLU(),
                     nn.Linear(attn_dim, attn_dim)
                 ),
-                "norm1": nn.LayerNorm(attn_dim),
             }))
 
         
         self.attn_weights = [] 
 
         self.classification = nn.ModuleList([
-            nn.Linear(in_features=attn_dim, out_features=attn_dim*2),
+            nn.Linear(in_features=attn_dim, out_features=attn_dim),
             nn.ReLU(),
-            nn.Linear(in_features=attn_dim*2, out_features=dictionary_size)
+            nn.Linear(in_features=attn_dim, out_features=dictionary_size)
         ])
 
     def forward(self, x, need_weights=False):
@@ -136,7 +140,7 @@ class Transformer(nn.Module):
         for layer in self.attention_layers:
             residual = emb
             attn_output, attn_w = layer["mha"](emb, emb, emb, attn_mask=attn_mask, need_weights=need_weights)
-            emb = layer["norm1"](residual + attn_output)
+            emb = residual + attn_output
 
             if need_weights:
                 self.attn_weights.append(attn_w.detach().cpu())
@@ -179,13 +183,14 @@ def eval_epoch(model, loader, loss_fn):
     return total_loss / len(loader)
 vocab_size = 5
 
-early_stopper = EarlyStopper(patience=10)
 
 model = Transformer(max_seq_len=512, num_attn_layer=2, dictionary_size=vocab_size).to(device)
-optimizer = torch.optim.SGD(model.parameters(), lr=5e-3)
+optimizer = torch.optim.Adam(model.parameters(), lr=5e-3)
 loss_fn = nn.CrossEntropyLoss()
 
-for epoch in range(200):
+early_stopper = EarlyStopper(patience=20)
+
+for epoch in range(600):
     train_loss = train_epoch(model, train_loader, optimizer, loss_fn)
     val_loss = eval_epoch(model, val_loader, loss_fn)
     print(f"Epoch {epoch+1}: train loss = {train_loss:.4f}, val loss = {val_loss:.4f}")
@@ -193,22 +198,100 @@ for epoch in range(200):
         break
 
 
-def visualize_attention(attn_weights, token_labels=None):
-    for layer_idx, layer_attn in enumerate(attn_weights):
-        layer_attn = layer_attn[0].detach().numpy()
-        plt.figure(figsize=(6, 5))
-        sns.heatmap(layer_attn, annot=False, cmap="Blues", xticklabels=token_labels, yticklabels=token_labels)
-        plt.title(f"Layer {layer_idx}")
-        plt.xlabel("Key positions")
-        plt.ylabel("Query positions")
+# def visualize_attention(attn_weights, token_labels=None):
+#     for layer_idx, layer_attn in enumerate(attn_weights):
+#         layer_attn = layer_attn[0].detach().numpy()
+#         plt.figure(figsize=(6, 5))
+#         sns.heatmap(layer_attn, annot=False, cmap="Blues", xticklabels=token_labels, yticklabels=token_labels)
+#         plt.title(f"Layer {layer_idx}")
+#         plt.xlabel("Key positions")
+#         plt.ylabel("Query positions")
+            
+#         plt.show()
+
+
+def visualize_r_attention(attn_weights, token_seq):
+    seq_len = len(token_seq)
+    
+    r_positions = [i for i, t in enumerate(token_seq) if t == 'r']
+    r_pairs = [(i, i+1) for i in r_positions if i + 1 < seq_len]
+
+    query_indices = []
+    query_labels = []
+    color_indices = []
+
+    for color_id, (r_idx, next_idx) in enumerate(r_pairs):
+        query_indices.append(r_idx)
+        query_labels.append(f"r@{r_idx}")
+        color_indices.append(color_id)
+
+        query_indices.append(next_idx)
+        query_labels.append(f"{token_seq[next_idx]}@{next_idx}")
+        color_indices.append(color_id)
+
+    # Predefine some colors
+    palette = sns.color_palette("husl", n_colors=len(r_pairs))
+    num_layers = len(attn_weights)
+
+    for layer_idx in range(num_layers):
+        weights = attn_weights[layer_idx].mean(dim=0)  # (seq_len, seq_len)
+
+        # Rows for r and number after r
+        selected_rows = weights[query_indices]  # (num_queries, seq_len)
+        selected_np = selected_rows.cpu().numpy()
+
+        # Setup plot
+        plt.figure(figsize=(12, len(query_indices) * 0.6 + 1))
+        ax = sns.heatmap(
+            selected_np,
+            cmap="YlOrRd",
+            xticklabels=token_seq,
+            yticklabels=query_labels,
+            cbar=True,
+            linewidths=0.3,
+            linecolor='gray',
+        )
+
+        ax.set_title(f"Attention Map (Layer {layer_idx + 1})", fontsize=14)
+        ax.set_xlabel("Key Positions", fontsize=12)
+        ax.set_ylabel("Query Tokens", fontsize=12)
+
+        # Color and bold the yticklabels (queries)
+        for i, label in enumerate(ax.get_yticklabels()):
+            label.set_color(palette[color_indices[i]])
+            label.set_weight("bold")
+
+        # Color and bold the xticklabels (keys)
+        xtick_tokens = token_seq
+        for i, label in enumerate(ax.get_xticklabels()):
+            for j, (r_idx, next_idx) in enumerate(r_pairs):
+                if i == r_idx or i == next_idx:
+                    label.set_color(palette[j])
+                    label.set_weight("bold")
+
+        # Annotate the highest attention in each row
+        for row_idx, row in enumerate(selected_np):
+            max_col = np.argmax(row)
+            ax.text(
+                max_col + 0.5,
+                row_idx + 0.5,
+                f"{row[max_col]:.2f}",
+                ha="center",
+                va="center",
+                fontsize=8,
+                fontweight="bold",
+                color="black",
+                bbox=dict(facecolor='white', edgecolor='none', boxstyle='round,pad=0.2'),
+            )
+
+        plt.tight_layout()
         plt.show()
 
-
-sentence = "w0w1r1i0i0r1w0r0"
+sentence = "w0w1w1r1r1w0w1w1w0r0"
 ids = torch.tensor([[flip_flop_dict[c] for c in sentence]]).to(device)  # [1, seq_len]
 model.eval()
 _ = model(ids, need_weights=True)
 attn_weights = model.attn_weights
 
 # Visualize
-visualize_attention(attn_weights, token_labels=list(sentence))
+visualize_r_attention(attn_weights, token_seq=list(sentence))
