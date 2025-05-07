@@ -10,7 +10,7 @@ import torch.nn.functional as F
 from torch.utils.data import DataLoader, TensorDataset
 import numpy as np
 from matplotlib import pyplot as plt
-import pickle
+# import pickle
 from datetime import datetime
 # %%
 
@@ -45,7 +45,7 @@ def data_generator(
             list(map(int, bin(i)[2:].zfill(n))), dtype=torch.float
             )
     y = x[:, parity_bits].sum(dim=1) % 2
-    # y = - 2 * y + 1
+    # y = 2 * y - 1
     y = y.reshape(-1, 1)
     x_embeddings = torch.stack([simple_embedding(row) for row in x])
     indices = torch.randperm(num)[:num_data]
@@ -63,11 +63,12 @@ def collect_attention(heads, sample):
     for head in heads:
         Av0 = torch.matmul(v0, head.A)
         scores = torch.matmul(sample, Av0.unsqueeze(-1)).squeeze(-1)
-        # temperature = 1 / 20
-        # scores /= temperature
+        temperature = 1 / 30
+        scores /= temperature
         attention_weights = F.softmax(scores, dim=-1)
         weights.append(attention_weights)
     return weights
+
 
 def print_initialisation_information(heads, sample, true_bits):
     print("-------------init information------------")
@@ -79,13 +80,19 @@ def print_initialisation_information(heads, sample, true_bits):
         Av0 = torch.matmul(v0, head.A)
         scores = torch.matmul(sample, Av0.unsqueeze(-1)).squeeze(-1)
         attention_weights = F.softmax(scores, dim=-1)
-        indexed_scores = [(weight, i) for i, weight in enumerate(attention_weights)]
+        indexed_scores = [
+            (weight, i) for i, weight in enumerate(attention_weights)
+        ]
         indexed_scores.sort(reverse=True, key=lambda x: x[0])
-        rank_map = {idx: rank for rank, (_, idx) in enumerate(indexed_scores, start=1)}
+        rank_map = {
+            idx: rank for rank, (_, idx) in enumerate(indexed_scores, start=1)
+        }
         ranked_positions = sorted(true_bits, key=lambda pos: rank_map[pos])
         print(f"the rank of head {i} is: {ranked_positions}.")
-    
+
     return ranked_positions
+
+
 class parity_NN(nn.Module):
     def __init__(self, k: int = 3) -> None:
         super().__init__()
@@ -111,11 +118,11 @@ class parity_NN(nn.Module):
 
             second_layer = self.network[2]
             weights = torch.tensor(
-                [((-1) ** i) * (2 + 2 * i) for i in range(k)],
+                [((-1) ** i) * (2 + 4 * i) for i in range(k)],
                 dtype=torch.float32
                 )
-            second_layer.weight.data = weights.view(1, -1)  # Shape: (k, 1)
-            second_layer.bias.data.zero_()
+            second_layer.weight.data = weights.view(1, -1)
+            second_layer.bias.data = torch.Tensor([0])
 
     def freeze_params(self):
         for param in self.network.parameters():
@@ -168,8 +175,8 @@ def visualize_weights(weights, true_bits):
 
 def test(model, x, y):
     pred = model(x)
-    print(y[:5])
-    print(pred[:5])
+    # print(y[:5])
+    # print(pred[:5])
     predicted_classes = (pred >= 0.5).float()
     correct_predictions = (predicted_classes == y).sum()
     accuracy = correct_predictions / y.size(0)
@@ -177,15 +184,15 @@ def test(model, x, y):
 
 
 if __name__ == "__main__":
-    length = 30
+    length = 15
     number_of_data = int(2**length * 0.8)
-    k = 2
-    epochs = 30
-    batch_size = 12000
+    k = 3
+    epochs = 3000
+    batch_size = 2**length
     loss_fn = HingeLoss(task="binary")
+    # loss_fn = MyHingeLoss()
     # loss_fn = BinaryHingeLoss(squared=True)
-    # loss_fn = nn.MSELoss()
-    x, y, data, label, bits = data_generator(number_of_data, k)
+    x, y, data, label, bits = data_generator(number_of_data, k, length)
     dataset = TensorDataset(data, label)
     dataloader = DataLoader(dataset, batch_size=batch_size, shuffle=True)
     parity_network = parity_NN(k)
@@ -196,7 +203,9 @@ if __name__ == "__main__":
             )
     total_weights = []
     with torch.no_grad():
-        print_initialisation_information(parity_network.attention_heads, data[0], bits)
+        print_initialisation_information(
+            parity_network.attention_heads, data[0], bits
+        )
         total_weights.append(
             collect_attention(parity_network.attention_heads, data[0])
             )
@@ -228,4 +237,3 @@ if __name__ == "__main__":
     for head in parity_network.attention_heads:
         sum_of_norms += torch.norm(head.A)
     print(f"the sum of the norms of the attention heads is: {sum_of_norms}.")
-        

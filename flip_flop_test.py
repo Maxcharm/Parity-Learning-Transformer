@@ -193,7 +193,6 @@ for epoch in range(200):
         break
 
 
-
 def visualize_attention(attn_weights, token_labels=None):
     for layer_idx, layer_attn in enumerate(attn_weights):
         layer_attn = layer_attn[0].detach().numpy()
@@ -202,8 +201,8 @@ def visualize_attention(attn_weights, token_labels=None):
         plt.title(f"Layer {layer_idx}")
         plt.xlabel("Key positions")
         plt.ylabel("Query positions")
-            
         plt.show()
+
 
 sentence = "w0w1r1i0i0r1w0r0"
 ids = torch.tensor([[flip_flop_dict[c] for c in sentence]]).to(device)  # [1, seq_len]
