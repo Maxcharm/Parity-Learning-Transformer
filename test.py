@@ -42,7 +42,7 @@ for epoch in range(10):
     # Forward pass through attention
     attn_output, attn_weights = mha(embedded_x, embedded_x, embedded_x, attn_mask=mask)
     
-    # Predict token logits
+    # Predict token logits  
     logits = output_layer(attn_output)  # Shape: (seq_len, batch, vocab_size)
     
     # Reshape for loss: merge batch and sequence dims
