@@ -1,5 +1,7 @@
-*.jpg
-*.png
-pictures/
-illustrations/
 weights/
+losses/
+plots/
+log/
+__pycache__
+playground/*
+numeric_log
